@@ -18,14 +18,15 @@
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_http_client.h"
+#include "esp_tls.h"
 #include "bmp280.h"
 #include "ens160.h"
 #include "hall_sensor.h"
 
 // WiFi and server configuration
 #define WIFI_SSID "Murovane ABIV" //S B N V
-#define WIFI_PASS "19791979"
-#define SERVER_URL "http://192.168.0.102:3000" //http://192.168.0.102:3000/api/data
+#define WIFI_PASS "19801980"
+#define SERVER_URL "https://192.168.0.102:3000" //http://192.168.0.102:3000/api/data
 static const char *TAG = "meteostation";
 
 // Configuration
@@ -77,9 +78,67 @@ typedef struct {
 time_tracker_t time_tracker;
 static sensor_data_t sensor_data = {0};
 
+static const char server_root_cert_pem[] = 
+"-----BEGIN CERTIFICATE-----\n"
+"MIIFETCCAvmgAwIBAgIUcRMdE/6KXSUqF+cIYeFBjb8d1jQwDQYJKoZIhvcNAQEL\n"
+"BQAwGDEWMBQGA1UEAwwNTXlMb2NhbFJvb3RDQTAeFw0yNTEwMjcxNzIzMDdaFw0y\n"
+"ODA4MTYxNzIzMDdaMBgxFjAUBgNVBAMMDU15TG9jYWxSb290Q0EwggIiMA0GCSqG\n"
+"SIb3DQEBAQUAA4ICDwAwggIKAoICAQC1yK8eeUpd0kmDXU6HGkudObaKft9EudtO\n"
+"KkrgXgb1nQd/1nIyoVn2Mog4s6aeTIJpGU7A6vGRQekpVU8z4XqRHRBUESfNid7s\n"
+"A7f48voHkzWUTzVfdUETYau5cffLcE03LWxzA2lT0sUbXfr7D6gZmkvHx4OzT56l\n"
+"g7VMhKWCsejADtHC7qbYW0CzZuwQUW18jK4RjnAoEPRMcJYtSgmOUVYwoMBCs8K7\n"
+"ti9PFZ8xHpqaYNMlZBfQqTjM8HLWzoU98BtFxKI4rdjRW3xGejY8IdyFWtxHs6Hz\n"
+"7GbbGG0FzrNm8Ec5L7nDjHjD/5uIElXbiB085KLvt1wzBf0vlwLj24CS9unGheZR\n"
+"wbeAwTIa4FYPkeNKh7Z3i1eXjub2PdJJfkvc647wgfR4+QQTXbiAKBWyon/tTKEb\n"
+"iSjWSAr8h7nZG0ALBOdcmre6QpsMnepB6MmsPk3EFoI8k+YkoZfQ1Fuc7hmvFGKQ\n"
+"YAqUexxOoYc8grgRtluLDMx/hmSNkYKMOjMiUaf490mySuA4I+4Lr57U9hhZVMSX\n"
+"H2e+JWgRG6SXZopvwA/nS5C56yMT+UXRoTvJCYAC6S2hHxc4EVFWChLbEkmjwSl8\n"
+"+MNLPQrkQdh6waaDtBZMoKnPuJsPYNvm10rCk8bfab5U3dqhTgbaCZJOy/Bz3cAL\n"
+"unCee0XVNwIDAQABo1MwUTAdBgNVHQ4EFgQUF3NXNk9QxktDYWs/bsUWey1p6D0w\n"
+"HwYDVR0jBBgwFoAUF3NXNk9QxktDYWs/bsUWey1p6D0wDwYDVR0TAQH/BAUwAwEB\n"
+"/zANBgkqhkiG9w0BAQsFAAOCAgEAFOdkoZznC1/+laWY3Q//wB1810HRZeGz5TvP\n"
+"kYXiSeoL/Hw/xXzUwBj1yI5lfgBHwwCChobQ06D8DBErJ9dmr3nQrbPUTwle5gpp\n"
+"S9fdex7UkDB51q/SBo6dWpaPNQpOdrfOCC6h1WuA1sDKomod7/roI3Ubefu6js4q\n"
+"B2CMvAjxpPQdT9uya2CMeyp6QKELYmg/Yk2qrfYuSq+nG3XqhpGoJLLO7HXTvDf/\n"
+"RxCeCDVpOUJcw5TJEoJ89N2ggnNGZdM/cQzfWU/Y9oa13i9paLxpUprYia3Tyadi\n"
+"qc4rRek4YltBxBXUIrwFeIIcd+ylSpxm0VD1rKgH2G8P5o3KWmYDmfDSOrhtVX3w\n"
+"kio55809LdrU5M8I3jU3LgIclcceB/Zq1EJBjmDDPjI5hcKLljYgO+PGOT1QVuq3\n"
+"XapxNX/Hrlvvsn0TroxqLuhiIv5H92T7B4WWTFydsc2uf4/puVf2OoHe91QPIvgZ\n"
+"8Vlv6yChdaigBAcX5vy5oIyEcHaqivYfOP+4uuMyeCwNX7yTaOgr0iD27v/Ydk5s\n"
+"zn/ZocFqYjvAv/0qRqnAeJaGfh7a2gBti3wnmU6uce/LpVLz//OjhMftPN7uQcVz\n"
+"dKBC28LZKRbjQ+aMXZK52Gt7R/RtT43oytYLl546GQwLkAfDgkxqMD18vaiQX2eN\n"
+"sJfCTcY=\n"
+"-----END CERTIFICATE-----\n";
+
+static const char *DEVICE_TOKEN = "MeteostationVereshchakToken";
+static const unsigned char HMAC_KEY[] = "BogdanNaziariiSimkoCharchok";
+
+char *compute_hmac_hex(const char *payload) {
+    if (!payload) return NULL;
+    unsigned char output[32];
+    const mbedtls_md_info_t *md_info = mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
+    if (!md_info) {
+        ESP_LOGE(TAG, "mbedtls md info error");
+        return NULL;
+    }
+    int ret = mbedtls_md_hmac(md_info, HMAC_KEY, sizeof(HMAC_KEY)-1,
+                              (const unsigned char *)payload, strlen(payload), output);
+    if (ret != 0) {
+        ESP_LOGE(TAG, "mbedtls_md_hmac failed: -0x%04x", -ret);
+        return NULL;
+    }
+    // Convert to hex string
+    char *hex = malloc(65);
+    if (!hex) return NULL;
+    for (int i = 0; i < 32; ++i) {
+        sprintf(hex + i*2, "%02x", output[i]);
+    }
+    hex[64] = '\0';
+    return hex;
+}
+
 // Some Function Declarations
 esp_err_t sync_time_with_retry(int max_retries);
-
 
 // WiFi event handler
 static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data) {
@@ -143,6 +202,8 @@ esp_err_t get_config_from_server() {
     esp_http_client_config_t config = {
         .url = SERVER_URL "/api/config",
         .timeout_ms = 5000,
+        .cert_pem = server_root_cert_pem,
+        .transport_type = HTTP_TRANSPORT_OVER_SSL,
     };
 
     char buffer[512+1]={0};
@@ -150,9 +211,14 @@ esp_err_t get_config_from_server() {
 
     ESP_LOGI(TAG, "HTTP native request =>");
     esp_http_client_handle_t client = esp_http_client_init(&config);
+    if (!client) {
+        ESP_LOGE(TAG, "Failed to init http client");
+        return ESP_FAIL;
+    }
 
     // GET Request
     esp_http_client_set_method(client, HTTP_METHOD_GET);
+    esp_http_client_set_header(client, "Authorization", DEVICE_TOKEN);
     esp_err_t err = esp_http_client_open(client, 0);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to open HTTP connection: %s", esp_err_to_name(err));
@@ -269,6 +335,10 @@ static esp_err_t send_data_to_server(const char *json_data) {
         return ESP_FAIL;
     }
     esp_http_client_handle_t client = esp_http_client_init(&config);
+    if (!client) {
+        ESP_LOGE(TAG, "Failed to init http client");
+        return ESP_FAIL;
+    }
     esp_http_client_set_header(client, "Content-Type", "application/json");
     esp_http_client_set_post_field(client, json_data, strlen(json_data));
     
@@ -281,6 +351,62 @@ static esp_err_t send_data_to_server(const char *json_data) {
         ESP_LOGE(TAG, "HTTP POST request failed: %s", esp_err_to_name(err));
     }
     
+    esp_http_client_cleanup(client);
+    return err;
+}
+// HTTPS POST request to send JSON data
+static esp_err_t send_data_to_server_secure(const char *json_data) {
+    char full_url[160];
+    snprintf(full_url, sizeof(full_url), "%s%s", SERVER_URL, "/api/data");
+
+    esp_http_client_config_t config = {
+        .url = full_url,
+        .method = HTTP_METHOD_POST,
+        .timeout_ms = 10000,
+        .cert_pem = server_root_cert_pem, // важливо: сертифікат для перевірки TLS
+        .transport_type = HTTP_TRANSPORT_OVER_SSL,
+    };
+
+    if (!wifi_connected) {
+        ESP_LOGE(TAG, "Cannot send data - WiFi not connected");
+        return ESP_FAIL;
+    }
+
+    esp_http_client_handle_t client = esp_http_client_init(&config);
+    if (!client) {
+        ESP_LOGE(TAG, "Failed to init http client");
+        return ESP_FAIL;
+    }
+
+    // Compute HMAC signature for payload
+    char *sig_hex = compute_hmac_hex(json_data);
+    if (!sig_hex) {
+        esp_http_client_cleanup(client);
+        return ESP_FAIL;
+    }
+
+    esp_http_client_set_method(client, HTTP_METHOD_POST);
+    esp_http_client_set_header(client, "Content-Type", "application/json");
+    esp_http_client_set_header(client, "Authorization", DEVICE_TOKEN);
+    esp_http_client_set_header(client, "X-Signature", sig_hex);
+    esp_http_client_set_post_field(client, json_data, strlen(json_data));
+
+    esp_err_t err = esp_http_client_perform(client);
+    if (err == ESP_OK) {
+        int status = esp_http_client_get_status_code(client);
+        int content_len = esp_http_client_get_content_length(client);
+        ESP_LOGI(TAG, "HTTPS POST Status = %d, content_length = %d", status, content_len);
+        char buffer[256];
+        int r = esp_http_client_read_response(client, buffer, sizeof(buffer)-1);
+        if (r > 0) {
+            buffer[r] = '\0';
+            ESP_LOGI(TAG, "Response: %s", buffer);
+        }
+    } else {
+        ESP_LOGE(TAG, "HTTPS POST request failed: %s", esp_err_to_name(err));
+    }
+
+    free(sig_hex);
     esp_http_client_cleanup(client);
     return err;
 }
@@ -355,6 +481,8 @@ esp_err_t fetch_time_from_server() {
     esp_http_client_config_t config = {
         .url = SERVER_URL "/time",
         .timeout_ms = 5000,
+        .transport_type = HTTP_TRANSPORT_OVER_SSL,
+        .cert_pem = server_root_cert_pem
     };
 
     char buffer[512+1]={0};
@@ -362,13 +490,14 @@ esp_err_t fetch_time_from_server() {
 
     ESP_LOGI(TAG, "HTTP native request =>");
     esp_http_client_handle_t client = esp_http_client_init(&config);
-    if (client == NULL) {
-        ESP_LOGE(TAG, "Failed to initialize HTTP client");
+    if (!client) {
+        ESP_LOGE(TAG, "Failed to init http client");
         return ESP_FAIL;
     }
 
     // GET Request
     esp_http_client_set_method(client, HTTP_METHOD_GET);
+    esp_http_client_set_header(client, "Authorization", DEVICE_TOKEN);
     esp_err_t err = esp_http_client_open(client, 0);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to open HTTP connection: %s", esp_err_to_name(err));
@@ -599,7 +728,7 @@ static void data_task(void *pvParameters) {
             vTaskDelay(pdMS_TO_TICKS(500)); // Wait for half a second before sending data
 
             // Send data to server
-            esp_err_t ret = send_data_to_server(json_data);
+            esp_err_t ret = send_data_to_server_secure(json_data);
             if (ret != ESP_OK) {
                 ESP_LOGE(TAG, "Failed to send data to server");
                 // TODO: Store data locally for later transmission
