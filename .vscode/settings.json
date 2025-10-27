@@ -4,6 +4,7 @@
         "esp_timer.h": "c",
         "sdkconfig.h": "c",
         "ens160.h": "c",
-        "esp_http_client.h": "c"
+        "esp_http_client.h": "c",
+        "esp_wifi.h": "c"
     }
 }

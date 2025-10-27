@@ -69,9 +69,9 @@ bool ens160_read_data(i2c_port_t i2c_num, uint16_t *aqi, uint16_t *tvoc, uint16_
 
     uint8_t data[5];
     if (ens160_read_bytes(i2c_num, ENS160_REG_AQI, data, 5) != ESP_OK) {
-        *aqi = NAN;
-        *tvoc = NAN;
-        *eco2 = NAN;
+        *aqi = UINT16_MAX;
+        *tvoc = UINT16_MAX;
+        *eco2 = UINT16_MAX;
         return false;
     }
 

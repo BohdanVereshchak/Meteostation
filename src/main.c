@@ -3,6 +3,7 @@
 #include <string.h>
 #include <time.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
@@ -22,19 +23,19 @@
 #include "hall_sensor.h"
 
 // WiFi and server configuration
-#define WIFI_SSID "KolesnukPisya" //S B N V
+#define WIFI_SSID "Murovane ABIV" //S B N V
 #define WIFI_PASS "19791979"
-#define SERVER_URL "http://172.20.10.2:3000" //http://192.168.0.101:3000/api/data
+#define SERVER_URL "http://192.168.0.102:3000" //http://192.168.0.102:3000/api/data
 static const char *TAG = "meteostation";
 
 // Configuration
 #define DEFAULT_UPDATE_INTERVAL_MS 30000       // 5 minutes
 
 // GPIO Definitions
-#define I2C_SCL_GPIO 22
-#define I2C_SDA_GPIO 21
-#define I2C_SDA_GPIO_2 18
-#define I2C_SCL_GPIO_2 19
+#define I2C_SCL_GPIO 22 // BMP280 SCL
+#define I2C_SDA_GPIO 21 // BMP280 SDA
+#define I2C_SDA_GPIO_2 18 // ENS160 SDA
+#define I2C_SCL_GPIO_2 19 // ENS160 SCL
 #define HALL_SENSOR_GPIO 15
 
 // Task priorities
@@ -648,15 +649,24 @@ void app_main(void) {
     esp_err_t err;
     nvs_handle_t nvs_handle;
     if (nvs_open("storage", NVS_READWRITE, &nvs_handle) == ESP_OK) {
-        err = nvs_get_u32(nvs_handle, "update_interval", &update_interval_ms);
-    if (err != ESP_OK) {
-        update_interval_ms = DEFAULT_UPDATE_INTERVAL_MS;  // дефолт
-    }
+        uint32_t tmp;
+        err = nvs_get_u32(nvs_handle, "update_interval", &tmp);
 
-    err = nvs_get_u32(nvs_handle, "tip_count", &tip_count);
-    if (err != ESP_OK) {
-        tip_count = 0;  // дефолт
-    }
+        if (err != ESP_OK) {
+            update_interval_ms = DEFAULT_UPDATE_INTERVAL_MS;  // дефолт
+        }
+        else {
+            update_interval_ms = tmp;
+        }
+
+        err = nvs_get_u32(nvs_handle, "tip_count", &tmp);
+        if (err != ESP_OK) {
+            tip_count = 0; 
+        }
+        else {
+            tip_count = tmp;
+        }
+
         nvs_close(nvs_handle);
     }
     
