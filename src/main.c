@@ -18,15 +18,21 @@
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_http_client.h"
+#include "esp_http_server.h"
+#include "esp_netif.h"
 #include "esp_tls.h"
 #include "bmp280.h"
 #include "ens160.h"
 #include "hall_sensor.h"
+#include "mbedtls/md.h"
 
 // WiFi and server configuration
 #define WIFI_SSID "Murovane ABIV" //S B N V
 #define WIFI_PASS "19801980"
 #define SERVER_URL "https://192.168.0.102:3000" //http://192.168.0.102:3000/api/data
+#define SERVER_URL_MAX_LEN 128
+char server_url[SERVER_URL_MAX_LEN] = SERVER_URL;
+
 static const char *TAG = "meteostation";
 
 // Configuration
@@ -56,7 +62,40 @@ uint32_t last_interval;
 char wifi_ssid[64] = WIFI_SSID;
 char wifi_password[64] = WIFI_PASS;
 
+// Config portal variables
+static bool config_portal_active = false;
+static SemaphoreHandle_t config_saved_sem = NULL;
+static const char config_page_html[] =
+    "<!doctype html>\n"
+    "<html><head><meta charset='utf-8'><title>Meteo config</title></head>\n"
+    "<body>\n"
+    "<h2>Meteostation configuration</h2>\n"
+    "<label>WiFi SSID: <input id='ssid' value=''></label><br>\n"
+    "<label>WiFi Password: <input id='pass' value='' type='password'></label><br>\n"
+    "<label>Server URL: <input id='server' value=''></label><br>\n"
+    "<label>Update interval ms: <input id='interval' value=''></label><br>\n"
+    "<button onclick='save()'>Save & Reboot</button>\n"
+    "<script>\n"
+    "async function save(){\n"
+    "  const body = { wifi_ssid: document.getElementById('ssid').value,\n"
+    "                 wifi_password: document.getElementById('pass').value,\n"
+    "                 server_url: document.getElementById('server').value,\n"
+    "                 update_interval_ms: parseInt(document.getElementById('interval').value) || 30000 };\n"
+    "  const resp = await fetch('/save', { method: 'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});\n"
+    "  const t = await resp.text();\n"
+    "  alert(t);\n"
+    "}\n"
+    "fetch('/values').then(r=>r.json()).then(j=>{\n"
+    " document.getElementById('ssid').value = j.wifi_ssid || '';\n"
+    " document.getElementById('pass').value = j.wifi_password || '';\n"
+    " document.getElementById('server').value = j.server_url || '';\n" "document.getElementById('interval').value = j.update_interval_ms || 30000;\n"
+    "});\n"
+    "</script>\n</body></html>";
 
+// HTTP server handle
+static httpd_handle_t config_httpd = NULL;
+
+// Structures
 typedef struct {
     time_t base_unix_time;
     int64_t base_esp_time_us;
@@ -140,18 +179,263 @@ char *compute_hmac_hex(const char *payload) {
 // Some Function Declarations
 esp_err_t sync_time_with_retry(int max_retries);
 
+// Install config into NVS in wifi_ssid, wifi_password, server_url
+static void load_config_from_nvs(void) {
+    nvs_handle_t nvs_handle;
+    if (nvs_open("storage", NVS_READWRITE, &nvs_handle) != ESP_OK) {
+        ESP_LOGW(TAG, "NVS open failed, using defaults");
+        return;
+    }
+
+    uint32_t u32;
+    if (nvs_get_u32(nvs_handle, "update_interval", &u32) == ESP_OK) {
+        update_interval_ms = u32;
+    }
+
+    if (nvs_get_u32(nvs_handle, "tip_count", &u32) == ESP_OK) {
+        tip_count = u32;
+    }
+
+    size_t required = sizeof(wifi_ssid);
+    if (nvs_get_str(nvs_handle, "wifi_ssid", wifi_ssid, &required) != ESP_OK) {}
+
+    required = sizeof(wifi_password);
+    if (nvs_get_str(nvs_handle, "wifi_password", wifi_password, &required) != ESP_OK) {}
+
+    required = sizeof(server_url);
+    if (nvs_get_str(nvs_handle, "server_url", server_url, &required) != ESP_OK) {}
+
+    nvs_close(nvs_handle);
+    ESP_LOGI(TAG, "Loaded config from NVS: ssid='%s', server_url='%s', interval=%u",
+             wifi_ssid, server_url, update_interval_ms);
+}
+
+// Save config to NVS (wifi_ssid, wifi_password, server_url, update_interval_ms, tip_count)
+static esp_err_t save_config_to_nvs(void) {
+    nvs_handle_t nvs_handle;
+    esp_err_t err = nvs_open("storage", NVS_READWRITE, &nvs_handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "NVS open failed");
+        return err;
+    }
+
+    err = nvs_set_u32(nvs_handle, "update_interval", update_interval_ms);
+    if (err != ESP_OK) { nvs_close(nvs_handle); return err; }
+
+    err = nvs_set_u32(nvs_handle, "tip_count", tip_count);
+    if (err != ESP_OK) { nvs_close(nvs_handle); return err; }
+
+    err = nvs_set_str(nvs_handle, "wifi_ssid", wifi_ssid);
+    if (err != ESP_OK) { nvs_close(nvs_handle); return err; }
+
+    err = nvs_set_str(nvs_handle, "wifi_password", wifi_password);
+    if (err != ESP_OK) { nvs_close(nvs_handle); return err; }
+
+    err = nvs_set_str(nvs_handle, "server_url", server_url);
+    if (err != ESP_OK) { nvs_close(nvs_handle); return err; }
+
+    err = nvs_commit(nvs_handle);
+    nvs_close(nvs_handle);
+    ESP_LOGI(TAG, "Configuration saved to NVS");
+    return err;
+}
+
+static esp_err_t config_get_handler(httpd_req_t *req) {
+    httpd_resp_set_type(req, "text/html");
+    httpd_resp_send(req, config_page_html, strlen(config_page_html));
+    return ESP_OK;
+}
+
+static esp_err_t config_values_handler(httpd_req_t *req) {
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddStringToObject(root, "wifi_ssid", wifi_ssid);
+    cJSON_AddStringToObject(root, "wifi_password", wifi_password);
+    cJSON_AddStringToObject(root, "server_url", server_url);
+    cJSON_AddNumberToObject(root, "update_interval_ms", update_interval_ms);
+    char *s = cJSON_PrintUnformatted(root);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, s, strlen(s));
+    free(s);
+    cJSON_Delete(root);
+    return ESP_OK;
+}
+
+static esp_err_t config_save_handler(httpd_req_t *req) {
+    int len = req->content_len;
+    if (len <= 0 || len > 1024) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid body");
+        return ESP_FAIL;
+    }
+    char *buf = malloc(len + 1);
+    if (!buf) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Alloc failed");
+        return ESP_FAIL;
+    }
+    int ret = httpd_req_recv(req, buf, len);
+    if (ret <= 0) {
+        free(buf);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Recv failed");
+        return ESP_FAIL;
+    }
+    buf[len] = '\0';
+    cJSON *root = cJSON_Parse(buf);
+    free(buf);
+    if (!root) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "JSON parse error");
+        return ESP_FAIL;
+    }
+
+    cJSON *jssid = cJSON_GetObjectItem(root, "wifi_ssid");
+    cJSON *jpass = cJSON_GetObjectItem(root, "wifi_password");
+    cJSON *jserver = cJSON_GetObjectItem(root, "server_url");
+    cJSON *jinterval = cJSON_GetObjectItem(root, "update_interval_ms");
+
+    if (jssid && cJSON_IsString(jssid)) {
+        strncpy(wifi_ssid, jssid->valuestring, sizeof(wifi_ssid)-1);
+        wifi_ssid[sizeof(wifi_ssid)-1] = '\0';
+    }
+    if (jpass && cJSON_IsString(jpass)) {
+        strncpy(wifi_password, jpass->valuestring, sizeof(wifi_password)-1);
+        wifi_password[sizeof(wifi_password)-1] = '\0';
+    }
+    if (jserver && cJSON_IsString(jserver)) {
+        strncpy(server_url, jserver->valuestring, sizeof(server_url)-1);
+        server_url[sizeof(server_url)-1] = '\0';
+    }
+    if (jinterval && cJSON_IsNumber(jinterval)) {
+        update_interval_ms = jinterval->valueint;
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(500));
+    esp_err_t e = save_config_to_nvs();
+    cJSON_Delete(root);
+
+    if (e != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "NVS save failed");
+        return ESP_FAIL;
+    }
+    httpd_resp_sendstr(req, "Saved. Attempting to reconnect to new WiFi...");
+    if (config_saved_sem) {
+        xSemaphoreGive(config_saved_sem);
+    }
+    //esp_restart();
+    return ESP_OK;
+}
+
+static esp_err_t start_config_portal(void) {
+    if (config_portal_active) return ESP_OK;
+
+    ESP_LOGI(TAG, "Starting config portal (AP + HTTP server)");
+
+    //ESP_ERROR_CHECK(esp_wifi_stop());
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
+
+    wifi_config_t ap_config = {
+        .ap = {
+            .ssid = "MeteoConfig",
+            .ssid_len = 0,
+            .channel = 1,
+            .max_connection = 4,
+            .authmode = WIFI_AUTH_OPEN
+        }
+    };
+    ESP_ERROR_CHECK(esp_wifi_set_config(ESP_IF_WIFI_AP, &ap_config));
+    ESP_ERROR_CHECK(esp_wifi_start());
+
+    httpd_config_t http_config = HTTPD_DEFAULT_CONFIG();
+    http_config.server_port = 80;
+    if (httpd_start(&config_httpd, &http_config) == ESP_OK) {
+        httpd_uri_t root = {
+            .uri = "/",
+            .method = HTTP_GET,
+            .handler = config_get_handler,
+            .user_ctx = NULL
+        };
+        httpd_register_uri_handler(config_httpd, &root);
+
+        httpd_uri_t values = {
+            .uri = "/values",
+            .method = HTTP_GET,
+            .handler = config_values_handler,
+            .user_ctx = NULL
+        };
+        httpd_register_uri_handler(config_httpd, &values);
+
+        httpd_uri_t save = {
+            .uri = "/save",
+            .method = HTTP_POST,
+            .handler = config_save_handler,
+            .user_ctx = NULL
+        };
+        httpd_register_uri_handler(config_httpd, &save);
+
+        config_portal_active = true;
+        return ESP_OK;
+    } else {
+        ESP_LOGE(TAG, "Failed to start HTTP server for config portal");
+        return ESP_FAIL;
+    }
+}
+
+static void stop_config_portal(void) {
+    if (!config_portal_active) return;
+    if (config_httpd) {
+        httpd_stop(config_httpd);
+        config_httpd = NULL;
+    }
+    // повернутися в STA режим (не перезавантажуємо тут)
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
+    config_portal_active = false;
+    ESP_LOGI(TAG, "Config portal stopped; wifi set to STA");
+}
+
 // WiFi event handler
 static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data) {
+    static uint32_t backoff_ms = 10000;
+    static const uint32_t BACKOFF_MAX_MS = 60000;
+    static int64_t last_attempt_ms = 0;
+
+    int64_t now_ms = esp_timer_get_time() / 1000;
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
-        esp_wifi_connect();
+        if (!config_portal_active) {
+            ESP_LOGI(TAG, "WIFI_EVENT_STA_START: attempting connect");
+            esp_wifi_connect();
+            last_attempt_ms = now_ms;
+            backoff_ms = 10000; // скидаємо початковий backoff
+        } else {
+            ESP_LOGI(TAG, "WIFI_EVENT_STA_START: config portal active, skipping auto-connect");
+        }
+
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
+        wifi_event_sta_disconnected_t *dis = (wifi_event_sta_disconnected_t*) event_data;
+        int reason = dis ? dis->reason : -1;
         wifi_connected = false;
-        esp_wifi_connect();
-        ESP_LOGI(TAG, "Retrying to connect to the WiFi");
+        if (config_portal_active) {
+            ESP_LOGI(TAG, "STA disconnected (reason %d) but config portal active => skipping reconnect", reason);
+            return;
+        }
+        ESP_LOGW(TAG, "STA disconnected (reason %d). Last attempt %lld ms ago. Backoff %u ms",
+                 reason, (long long)(now_ms - last_attempt_ms), backoff_ms);
+        if ((now_ms - last_attempt_ms) >= (int64_t)backoff_ms) {
+            esp_err_t r = esp_wifi_connect();
+            if (r == ESP_OK) {
+                last_attempt_ms = now_ms;
+                ESP_LOGI(TAG, "esp_wifi_connect() initiated");
+            } else {
+                backoff_ms = backoff_ms * 2;
+                if (backoff_ms > BACKOFF_MAX_MS) backoff_ms = BACKOFF_MAX_MS;
+                last_attempt_ms = now_ms;
+                ESP_LOGW(TAG, "esp_wifi_connect() failed: %s — increasing backoff to %u ms", esp_err_to_name(r), backoff_ms);
+            }
+        } else {
+            ESP_LOGI(TAG, "Skipping reconnect attempt; will retry after backoff");
+        }
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
         ESP_LOGI(TAG, "Got IP: " IPSTR, IP2STR(&event->ip_info.ip));
         wifi_connected = true;
+        backoff_ms = 10000;
+        last_attempt_ms = now_ms;
     }
 }
 
@@ -159,6 +443,7 @@ static void wifi_task(void *pvParameters) {
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
     esp_netif_create_default_wifi_sta();
+    esp_netif_create_default_wifi_ap();
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
@@ -168,28 +453,68 @@ static void wifi_task(void *pvParameters) {
     ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, NULL, &instance_any_id));
     ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_event_handler, NULL, &instance_got_ip));
 
-    wifi_config_t wifi_config = {
-        .sta = {
-            .ssid = WIFI_SSID,
-            .password = WIFI_PASS,
-            .threshold.authmode = WIFI_AUTH_WPA2_PSK,
-        },
-    };
+    wifi_config_t wifi_config = { 0 };
+
+    strncpy((char*)wifi_config.sta.ssid, wifi_ssid, sizeof(wifi_config.sta.ssid)-1);
+    strncpy((char*)wifi_config.sta.password, wifi_password, sizeof(wifi_config.sta.password)-1);
+    wifi_config.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
 
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_set_config(ESP_IF_WIFI_STA, &wifi_config));
     vTaskDelay(1000 / portTICK_PERIOD_MS);
     ESP_ERROR_CHECK(esp_wifi_start());
 
+    int fail_count = 0;
+    const int MAX_FAILS_BEFORE_PORTAL = 2;
+
     while (1) {
         if (!wifi_connected) {
             ESP_LOGI(TAG, "WiFi not connected, attempting to reconnect...");
             esp_wifi_connect();
+            fail_count++;
             vTaskDelay(10000 / portTICK_PERIOD_MS); // Wait 10 seconds before retry
+            if (fail_count >= MAX_FAILS_BEFORE_PORTAL) {
+                ESP_LOGW(TAG, "Unable to connect after %d attempts, starting config portal", fail_count);
+                if (start_config_portal() != ESP_OK) {
+                    ESP_LOGE(TAG, "start_config_portal failed");
+                    vTaskDelay(30000 / portTICK_PERIOD_MS);
+                    fail_count = 0;
+                    continue;
+                }
+
+                if (config_saved_sem) {
+                    ESP_LOGI(TAG, "Waiting for user to save new config...");
+                    if (xSemaphoreTake(config_saved_sem, portMAX_DELAY) == pdTRUE) {
+                        ESP_LOGI(TAG, "Config saved by user, proceeding to live reconnect");
+                    } else {
+                        ESP_LOGW(TAG, "Timeout waiting for saved config");
+                    }
+                }
+                stop_config_portal();
+
+                wifi_config_t new_conf = { 0 };
+                strncpy((char*)new_conf.sta.ssid, wifi_ssid, sizeof(new_conf.sta.ssid)-1);
+                strncpy((char*)new_conf.sta.password, wifi_password, sizeof(new_conf.sta.password)-1);
+                new_conf.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
+
+                esp_err_t err = esp_wifi_set_mode(WIFI_MODE_STA); // ensure STA
+                if (err != ESP_OK) ESP_LOGW(TAG, "esp_wifi_set_mode STA failed: %s", esp_err_to_name(err));
+
+                err = esp_wifi_set_config(ESP_IF_WIFI_STA, &new_conf);
+                if (err != ESP_OK) {
+                    ESP_LOGE(TAG, "esp_wifi_set_config failed: %s", esp_err_to_name(err));
+                } else {
+                    esp_wifi_connect();
+                }
+                fail_count = 0;
+                vTaskDelay(5000 / portTICK_PERIOD_MS);
+                continue;
+            }
         } else {
             vTaskDelay(600000 / portTICK_PERIOD_MS); // Check connection every 10 minute
         }
     }
+    vTaskDelete(NULL);
 }
 
 // HTTP GET request to receive JSON config data
@@ -199,8 +524,11 @@ esp_err_t get_config_from_server() {
         return ESP_FAIL;
     }
 
+    char cfg_url[SERVER_URL_MAX_LEN + 16];
+    snprintf(cfg_url, sizeof(cfg_url), "%s/api/config", server_url);
+
     esp_http_client_config_t config = {
-        .url = SERVER_URL "/api/config",
+        .url = cfg_url,
         .timeout_ms = 5000,
         .cert_pem = server_root_cert_pem,
         .transport_type = HTTP_TRANSPORT_OVER_SSL,
@@ -223,6 +551,12 @@ esp_err_t get_config_from_server() {
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Failed to open HTTP connection: %s", esp_err_to_name(err));
         esp_http_client_cleanup(client);
+        if (!config_portal_active) {
+            if (start_config_portal() == ESP_OK) {
+                ESP_LOGI(TAG, "Local config portal active at station IP");
+                ESP_LOGI(TAG, "Connect to http://<ESP_IP>/ to update server URL");
+            }
+        }
         return err;
     } else {
         content_length = esp_http_client_fetch_headers(client);
@@ -232,10 +566,15 @@ esp_err_t get_config_from_server() {
             int data_read = esp_http_client_read_response(client, buffer, 512);
             if (data_read >= 0) {
                 buffer[data_read] = '\0'; // Null-terminate the buffer
-                ESP_LOGI(TAG, "HTTP GET Status = %d, content_length = %"PRId64,
-                esp_http_client_get_status_code(client),
-                esp_http_client_get_content_length(client));
-                ESP_LOGI(TAG, "Response: %s", buffer);
+                int status = esp_http_client_get_status_code(client);
+                ESP_LOGI(TAG, "HTTP GET Status = %d, Response: %s", status, buffer);
+                if (status == 200 || status == 204) {
+                    if (config_portal_active) {
+                        stop_config_portal();
+                        config_portal_active = false;
+                        ESP_LOGI(TAG, "Server connection successful — config portal stopped");
+                    }
+                }
             } else {
                 ESP_LOGE(TAG, "Failed to read response");
             }
@@ -318,46 +657,10 @@ esp_err_t get_config_from_server() {
     return ESP_OK;
 }
 
-// HTTP POST request to send JSON data
-static esp_err_t send_data_to_server(const char *json_data) {
-    char full_url[128];
-    snprintf(full_url, sizeof(full_url), "%s%s", SERVER_URL, "/api/data");
-
-    esp_http_client_config_t config = {
-        .url = full_url,
-        .method = HTTP_METHOD_POST,
-        .timeout_ms = 5000,
-        .cert_pem = NULL,
-    };
-    
-    if (!wifi_connected) {
-        ESP_LOGE(TAG, "Cannot send data - WiFi not connected");
-        return ESP_FAIL;
-    }
-    esp_http_client_handle_t client = esp_http_client_init(&config);
-    if (!client) {
-        ESP_LOGE(TAG, "Failed to init http client");
-        return ESP_FAIL;
-    }
-    esp_http_client_set_header(client, "Content-Type", "application/json");
-    esp_http_client_set_post_field(client, json_data, strlen(json_data));
-    
-    esp_err_t err = esp_http_client_perform(client);
-    if (err == ESP_OK) {
-        ESP_LOGI(TAG, "HTTP POST Status = %ld, content_length = %ld",
-                esp_http_client_get_status_code(client),
-                esp_http_client_get_content_length(client));
-    } else {
-        ESP_LOGE(TAG, "HTTP POST request failed: %s", esp_err_to_name(err));
-    }
-    
-    esp_http_client_cleanup(client);
-    return err;
-}
 // HTTPS POST request to send JSON data
 static esp_err_t send_data_to_server_secure(const char *json_data) {
     char full_url[160];
-    snprintf(full_url, sizeof(full_url), "%s%s", SERVER_URL, "/api/data");
+    snprintf(full_url, sizeof(full_url), "%s%s", server_url, "/api/data");
 
     esp_http_client_config_t config = {
         .url = full_url,
@@ -478,8 +781,11 @@ esp_err_t fetch_time_from_server() {
         return ESP_FAIL;
     }
 
+    char cfg_url[SERVER_URL_MAX_LEN + 16];
+    snprintf(cfg_url, sizeof(cfg_url), "%s/time", server_url);
+
     esp_http_client_config_t config = {
-        .url = SERVER_URL "/time",
+        .url = cfg_url,
         .timeout_ms = 5000,
         .transport_type = HTTP_TRANSPORT_OVER_SSL,
         .cert_pem = server_root_cert_pem
@@ -699,7 +1005,7 @@ static void sensor_task(void *pvParameters) {
             if(wifi_connected)
                 err = get_config_from_server();
             else {
-                vTaskDelay(pdMS_TO_TICKS(10000));
+                vTaskDelay(pdMS_TO_TICKS(60000));
                 continue;
             }
 
@@ -769,35 +1075,15 @@ void app_main(void) {
     }
     ESP_ERROR_CHECK(ret);
 
+    config_saved_sem = xSemaphoreCreateBinary();
+    if (config_saved_sem == NULL) {
+        ESP_LOGW(TAG, "Failed to create config_saved_sem");
+    }
+    load_config_from_nvs();
     time_tracker.mutex = xSemaphoreCreateMutex();
 
     printf("Initializing I2C interfaces...\n");
     init_i2c();
-    
-    // Load configuration from NVS
-    esp_err_t err;
-    nvs_handle_t nvs_handle;
-    if (nvs_open("storage", NVS_READWRITE, &nvs_handle) == ESP_OK) {
-        uint32_t tmp;
-        err = nvs_get_u32(nvs_handle, "update_interval", &tmp);
-
-        if (err != ESP_OK) {
-            update_interval_ms = DEFAULT_UPDATE_INTERVAL_MS;  // дефолт
-        }
-        else {
-            update_interval_ms = tmp;
-        }
-
-        err = nvs_get_u32(nvs_handle, "tip_count", &tmp);
-        if (err != ESP_OK) {
-            tip_count = 0; 
-        }
-        else {
-            tip_count = tmp;
-        }
-
-        nvs_close(nvs_handle);
-    }
     
     ESP_LOGI(TAG, "Configuration:");
     ESP_LOGI(TAG, "  Update interval: %d ms", update_interval_ms);

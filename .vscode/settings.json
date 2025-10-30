@@ -6,6 +6,11 @@
         "ens160.h": "c",
         "esp_http_client.h": "c",
         "esp_wifi.h": "c",
-        "esp_tls.h": "c"
+        "esp_tls.h": "c",
+        "esp_http_server.h": "c",
+        "cjson.h": "c",
+        "esp_netif.h": "c",
+        "md.h": "c",
+        "hall_sensor.h": "c"
     }
 }
