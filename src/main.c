@@ -29,7 +29,7 @@
 // WiFi and server configuration
 #define WIFI_SSID "Murovane ABIV" //S B N V
 #define WIFI_PASS "19801980"
-#define SERVER_URL "https://192.168.0.102:3000" //http://192.168.0.102:3000/api/data
+#define SERVER_URL "https://meteostation-230224899515.europe-central2.run.app" //http://192.168.0.102:3000/api/data
 #define SERVER_URL_MAX_LEN 128
 char server_url[SERVER_URL_MAX_LEN] = SERVER_URL;
 
@@ -119,34 +119,25 @@ static sensor_data_t sensor_data = {0};
 
 static const char server_root_cert_pem[] = 
 "-----BEGIN CERTIFICATE-----\n"
-"MIIFETCCAvmgAwIBAgIUcRMdE/6KXSUqF+cIYeFBjb8d1jQwDQYJKoZIhvcNAQEL\n"
-"BQAwGDEWMBQGA1UEAwwNTXlMb2NhbFJvb3RDQTAeFw0yNTEwMjcxNzIzMDdaFw0y\n"
-"ODA4MTYxNzIzMDdaMBgxFjAUBgNVBAMMDU15TG9jYWxSb290Q0EwggIiMA0GCSqG\n"
-"SIb3DQEBAQUAA4ICDwAwggIKAoICAQC1yK8eeUpd0kmDXU6HGkudObaKft9EudtO\n"
-"KkrgXgb1nQd/1nIyoVn2Mog4s6aeTIJpGU7A6vGRQekpVU8z4XqRHRBUESfNid7s\n"
-"A7f48voHkzWUTzVfdUETYau5cffLcE03LWxzA2lT0sUbXfr7D6gZmkvHx4OzT56l\n"
-"g7VMhKWCsejADtHC7qbYW0CzZuwQUW18jK4RjnAoEPRMcJYtSgmOUVYwoMBCs8K7\n"
-"ti9PFZ8xHpqaYNMlZBfQqTjM8HLWzoU98BtFxKI4rdjRW3xGejY8IdyFWtxHs6Hz\n"
-"7GbbGG0FzrNm8Ec5L7nDjHjD/5uIElXbiB085KLvt1wzBf0vlwLj24CS9unGheZR\n"
-"wbeAwTIa4FYPkeNKh7Z3i1eXjub2PdJJfkvc647wgfR4+QQTXbiAKBWyon/tTKEb\n"
-"iSjWSAr8h7nZG0ALBOdcmre6QpsMnepB6MmsPk3EFoI8k+YkoZfQ1Fuc7hmvFGKQ\n"
-"YAqUexxOoYc8grgRtluLDMx/hmSNkYKMOjMiUaf490mySuA4I+4Lr57U9hhZVMSX\n"
-"H2e+JWgRG6SXZopvwA/nS5C56yMT+UXRoTvJCYAC6S2hHxc4EVFWChLbEkmjwSl8\n"
-"+MNLPQrkQdh6waaDtBZMoKnPuJsPYNvm10rCk8bfab5U3dqhTgbaCZJOy/Bz3cAL\n"
-"unCee0XVNwIDAQABo1MwUTAdBgNVHQ4EFgQUF3NXNk9QxktDYWs/bsUWey1p6D0w\n"
-"HwYDVR0jBBgwFoAUF3NXNk9QxktDYWs/bsUWey1p6D0wDwYDVR0TAQH/BAUwAwEB\n"
-"/zANBgkqhkiG9w0BAQsFAAOCAgEAFOdkoZznC1/+laWY3Q//wB1810HRZeGz5TvP\n"
-"kYXiSeoL/Hw/xXzUwBj1yI5lfgBHwwCChobQ06D8DBErJ9dmr3nQrbPUTwle5gpp\n"
-"S9fdex7UkDB51q/SBo6dWpaPNQpOdrfOCC6h1WuA1sDKomod7/roI3Ubefu6js4q\n"
-"B2CMvAjxpPQdT9uya2CMeyp6QKELYmg/Yk2qrfYuSq+nG3XqhpGoJLLO7HXTvDf/\n"
-"RxCeCDVpOUJcw5TJEoJ89N2ggnNGZdM/cQzfWU/Y9oa13i9paLxpUprYia3Tyadi\n"
-"qc4rRek4YltBxBXUIrwFeIIcd+ylSpxm0VD1rKgH2G8P5o3KWmYDmfDSOrhtVX3w\n"
-"kio55809LdrU5M8I3jU3LgIclcceB/Zq1EJBjmDDPjI5hcKLljYgO+PGOT1QVuq3\n"
-"XapxNX/Hrlvvsn0TroxqLuhiIv5H92T7B4WWTFydsc2uf4/puVf2OoHe91QPIvgZ\n"
-"8Vlv6yChdaigBAcX5vy5oIyEcHaqivYfOP+4uuMyeCwNX7yTaOgr0iD27v/Ydk5s\n"
-"zn/ZocFqYjvAv/0qRqnAeJaGfh7a2gBti3wnmU6uce/LpVLz//OjhMftPN7uQcVz\n"
-"dKBC28LZKRbjQ+aMXZK52Gt7R/RtT43oytYLl546GQwLkAfDgkxqMD18vaiQX2eN\n"
-"sJfCTcY=\n"
+"MIIDejCCAmKgAwIBAgIQf+UwvzMTQ77dghYQST2KGzANBgkqhkiG9w0BAQsFADBX\n"
+"MQswCQYDVQQGEwJCRTEZMBcGA1UEChMQR2xvYmFsU2lnbiBudi1zYTEQMA4GA1UE\n"
+"CxMHUm9vdCBDQTEbMBkGA1UEAxMSR2xvYmFsU2lnbiBSb290IENBMB4XDTIzMTEx\n"
+"NTAzNDMyMVoXDTI4MDEyODAwMDA0MlowRzELMAkGA1UEBhMCVVMxIjAgBgNVBAoT\n"
+"GUdvb2dsZSBUcnVzdCBTZXJ2aWNlcyBMTEMxFDASBgNVBAMTC0dUUyBSb290IFI0\n"
+"MHYwEAYHKoZIzj0CAQYFK4EEACIDYgAE83Rzp2iLYK5DuDXFgTB7S0md+8Fhzube\n"
+"Rr1r1WEYNa5A3XP3iZEwWus87oV8okB2O6nGuEfYKueSkWpz6bFyOZ8pn6KY019e\n"
+"WIZlD6GEZQbR3IvJx3PIjGov5cSr0R2Ko4H/MIH8MA4GA1UdDwEB/wQEAwIBhjAd\n"
+"BgNVHSUEFjAUBggrBgEFBQcDAQYIKwYBBQUHAwIwDwYDVR0TAQH/BAUwAwEB/zAd\n"
+"BgNVHQ4EFgQUgEzW63T/STaj1dj8tT7FavCUHYwwHwYDVR0jBBgwFoAUYHtmGkUN\n"
+"l8qJUC99BM00qP/8/UswNgYIKwYBBQUHAQEEKjAoMCYGCCsGAQUFBzAChhpodHRw\n"
+"Oi8vaS5wa2kuZ29vZy9nc3IxLmNydDAtBgNVHR8EJjAkMCKgIKAehhxodHRwOi8v\n"
+"Yy5wa2kuZ29vZy9yL2dzcjEuY3JsMBMGA1UdIAQMMAowCAYGZ4EMAQIBMA0GCSqG\n"
+"SIb3DQEBCwUAA4IBAQAYQrsPBtYDh5bjP2OBDwmkoWhIDDkic574y04tfzHpn+cJ\n"
+"odI2D4SseesQ6bDrarZ7C30ddLibZatoKiws3UL9xnELz4ct92vID24FfVbiI1hY\n"
+"+SW6FoVHkNeWIP0GCbaM4C6uVdF5dTUsMVs/ZbzNnIdCp5Gxmx5ejvEau8otR/Cs\n"
+"kGN+hr/W5GvT1tMBjgWKZ1i4//emhA1JG1BbPzoLJQvyEotc03lXjTaCzv8mEbep\n"
+"8RqZ7a2CPsgRbuvTPBwcOMBBmuFeU88+FSBX6+7iP0il8b4Z0QFqIwwMHfs/L6K1\n"
+"vepuoxtGzi4CZ68zJpiq1UvSqTbFJjtbD4seiMHl\n"
 "-----END CERTIFICATE-----\n";
 
 static const char *DEVICE_TOKEN = "MeteostationVereshchakToken";
@@ -908,14 +899,19 @@ void time_updater_task(void *pvParameters) {
     while (!wifi_connected) {
         vTaskDelay(pdMS_TO_TICKS(1000)); // Wait for WiFi connectio
     }
-    esp_err_t err = sync_time_with_retry(3);
-    printf("Time fetching - %s", esp_err_to_name(err));
+    esp_err_t err;
+    do {
+        err = sync_time_with_retry(3);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "Initial time sync failed, retrying in 120s...");
+            vTaskDelay(pdMS_TO_TICKS(120000));
+        }
+    } while (err != ESP_OK);
+
+    ESP_LOGI(TAG, "Initial time sync successful");
 
     time_t current_unix = time_tracker.base_unix_time;
-    static time_t last_sync_time = 0;
-    if (err == ESP_OK) {
-        last_sync_time = current_unix;
-    }
+    time_t last_sync_time = current_unix;
 
     while (1) {
         int64_t now_us = esp_timer_get_time();
@@ -932,7 +928,7 @@ void time_updater_task(void *pvParameters) {
         snprintf(time_tracker.current_datetime, sizeof(time_tracker.current_datetime), "%s", datetime_str);
         xSemaphoreGive(time_tracker.mutex);
 
-        if (current_unix - last_sync_time >= 36000) {
+        if (current_unix - last_sync_time >= 360000) {
             if (wifi_connected) {
                 sync_time_with_retry(3);
                 last_sync_time = current_unix;
