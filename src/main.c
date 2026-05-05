@@ -25,11 +25,12 @@
 #include "ens160.h"
 #include "hall_sensor.h"
 #include "mbedtls/md.h"
+#include "esp_crt_bundle.h"
 
 // WiFi and server configuration
 #define WIFI_SSID "Murovane ABIV" //S B N V
 #define WIFI_PASS "19801980"
-#define SERVER_URL "https://meteostation-230224899515.europe-central2.run.app" //http://192.168.0.102:3000/api/data
+#define SERVER_URL "https://meteo.vereshchak.online:443" //http://192.168.0.102:3000/api/data
 #define SERVER_URL_MAX_LEN 128
 char server_url[SERVER_URL_MAX_LEN] = SERVER_URL;
 
@@ -116,29 +117,6 @@ typedef struct {
 
 time_tracker_t time_tracker;
 static sensor_data_t sensor_data = {0};
-
-static const char server_root_cert_pem[] = 
-"-----BEGIN CERTIFICATE-----\n"
-"MIIDejCCAmKgAwIBAgIQf+UwvzMTQ77dghYQST2KGzANBgkqhkiG9w0BAQsFADBX\n"
-"MQswCQYDVQQGEwJCRTEZMBcGA1UEChMQR2xvYmFsU2lnbiBudi1zYTEQMA4GA1UE\n"
-"CxMHUm9vdCBDQTEbMBkGA1UEAxMSR2xvYmFsU2lnbiBSb290IENBMB4XDTIzMTEx\n"
-"NTAzNDMyMVoXDTI4MDEyODAwMDA0MlowRzELMAkGA1UEBhMCVVMxIjAgBgNVBAoT\n"
-"GUdvb2dsZSBUcnVzdCBTZXJ2aWNlcyBMTEMxFDASBgNVBAMTC0dUUyBSb290IFI0\n"
-"MHYwEAYHKoZIzj0CAQYFK4EEACIDYgAE83Rzp2iLYK5DuDXFgTB7S0md+8Fhzube\n"
-"Rr1r1WEYNa5A3XP3iZEwWus87oV8okB2O6nGuEfYKueSkWpz6bFyOZ8pn6KY019e\n"
-"WIZlD6GEZQbR3IvJx3PIjGov5cSr0R2Ko4H/MIH8MA4GA1UdDwEB/wQEAwIBhjAd\n"
-"BgNVHSUEFjAUBggrBgEFBQcDAQYIKwYBBQUHAwIwDwYDVR0TAQH/BAUwAwEB/zAd\n"
-"BgNVHQ4EFgQUgEzW63T/STaj1dj8tT7FavCUHYwwHwYDVR0jBBgwFoAUYHtmGkUN\n"
-"l8qJUC99BM00qP/8/UswNgYIKwYBBQUHAQEEKjAoMCYGCCsGAQUFBzAChhpodHRw\n"
-"Oi8vaS5wa2kuZ29vZy9nc3IxLmNydDAtBgNVHR8EJjAkMCKgIKAehhxodHRwOi8v\n"
-"Yy5wa2kuZ29vZy9yL2dzcjEuY3JsMBMGA1UdIAQMMAowCAYGZ4EMAQIBMA0GCSqG\n"
-"SIb3DQEBCwUAA4IBAQAYQrsPBtYDh5bjP2OBDwmkoWhIDDkic574y04tfzHpn+cJ\n"
-"odI2D4SseesQ6bDrarZ7C30ddLibZatoKiws3UL9xnELz4ct92vID24FfVbiI1hY\n"
-"+SW6FoVHkNeWIP0GCbaM4C6uVdF5dTUsMVs/ZbzNnIdCp5Gxmx5ejvEau8otR/Cs\n"
-"kGN+hr/W5GvT1tMBjgWKZ1i4//emhA1JG1BbPzoLJQvyEotc03lXjTaCzv8mEbep\n"
-"8RqZ7a2CPsgRbuvTPBwcOMBBmuFeU88+FSBX6+7iP0il8b4Z0QFqIwwMHfs/L6K1\n"
-"vepuoxtGzi4CZ68zJpiq1UvSqTbFJjtbD4seiMHl\n"
-"-----END CERTIFICATE-----\n";
 
 static const char *DEVICE_TOKEN = "MeteostationVereshchakToken";
 static const unsigned char HMAC_KEY[] = "BogdanNaziariiSimkoCharchok";
@@ -521,7 +499,7 @@ esp_err_t get_config_from_server() {
     esp_http_client_config_t config = {
         .url = cfg_url,
         .timeout_ms = 5000,
-        .cert_pem = server_root_cert_pem,
+        .crt_bundle_attach = esp_crt_bundle_attach,
         .transport_type = HTTP_TRANSPORT_OVER_SSL,
     };
 
@@ -657,7 +635,7 @@ static esp_err_t send_data_to_server_secure(const char *json_data) {
         .url = full_url,
         .method = HTTP_METHOD_POST,
         .timeout_ms = 10000,
-        .cert_pem = server_root_cert_pem, // важливо: сертифікат для перевірки TLS
+        .crt_bundle_attach = esp_crt_bundle_attach, // важливо: сертифікат для перевірки TLS
         .transport_type = HTTP_TRANSPORT_OVER_SSL,
     };
 
@@ -779,7 +757,7 @@ esp_err_t fetch_time_from_server() {
         .url = cfg_url,
         .timeout_ms = 5000,
         .transport_type = HTTP_TRANSPORT_OVER_SSL,
-        .cert_pem = server_root_cert_pem
+        .crt_bundle_attach = esp_crt_bundle_attach
     };
 
     char buffer[512+1]={0};
@@ -1102,7 +1080,7 @@ void app_main(void) {
     
     // Create tasks
     xTaskCreate(wifi_task, "wifi_task", 4096, NULL, WIFI_TASK_PRIORITY, NULL);
-    xTaskCreate(time_updater_task, "time_task", 4096, NULL, TIME_TASK_PRIORITY, NULL);
+    xTaskCreate(time_updater_task, "time_task", 8192, NULL, TIME_TASK_PRIORITY, NULL);
     xTaskCreate(sensor_task, "sensor_task", 4096, NULL, SENSOR_TASK_PRIORITY, NULL);
     xTaskCreate(data_task, "data_task", 4096, NULL, SENSOR_TASK_PRIORITY, NULL);
     xTaskCreate(rain_task, "rain_task", 2048, NULL, RAIN_TASK_PRIORITY, NULL);
